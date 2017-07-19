@@ -93,10 +93,6 @@
 #endif
 #endif
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
 /* enum for Boolean */
 typedef enum _Boolean { FA, TR } Boolean;
 
@@ -315,6 +311,10 @@ double lspdf_even(double x, double *f, const int m, double *d);
 double lspdf_odd(double x, double *f, const int m, double *d);
 double ltcdf(double x, double *k, int m, double *d);
 void mc2b(double *mc, double *b, int m, const double a);
+
+int dtw(double *x, double *y, int num_test, int num_ref, int dim, int path_type, int norm_typed, int *out_addr,int *outviterbi_addr,long *length);
+int dtw_result(double *out, int *viterbi_path, int out_addr, int outviterbi_addr, long length, int dim);
+	
 int mcep(double *xw, const int flng, double *mc, const int m, const double a,
          const int itr1, const int itr2, const double dd, const int etype,
          const double e, const double f, const int itype);
@@ -422,8 +422,5 @@ int rapt(float *input, float* output, int length, double sample_freq,
 
 void b2c(double *b, int m1, double *c, int m2, double a);
 
-#if defined (__cplusplus)
-}
-#endif
 
 #endif  /* SPTK_H_ */

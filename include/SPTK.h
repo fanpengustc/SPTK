@@ -314,7 +314,10 @@ void mc2b(double *mc, double *b, int m, const double a);
 
 int dtw(double *x, double *y, int num_test, int num_ref, int dim, int path_type, int norm_typed, int *out_addr,int *outviterbi_addr,long *length);
 int dtw_result(double *out, int *viterbi_path, int out_addr, int outviterbi_addr, long length, int dim);
-	
+int gmm_train(double *dat,int *dim_list,int L,int M,int T,int cov_dim,int S,int Imin,int Imax,double     E,double V ,double W,double *out_weight,double *out_mean,double *out_cov);
+
+int vc_run(double *source,double *gmm_weight,double *gmm_mean,double *gmm_cov,double *gv_mean_in,double *gv_vari_in, int source_vlen,int target_vlen,int total_frame,int num_mix,int delta_order,int gv_flag, double FLOOR,double *target);
+
 int mcep(double *xw, const int flng, double *mc, const int m, const double a,
          const int itr1, const int itr2, const double dd, const int etype,
          const double e, const double f, const int itype);

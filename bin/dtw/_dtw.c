@@ -1451,7 +1451,7 @@ int dtw(double *x, double *y, int num_test, int num_ref, int dim, int path_type,
 {
       /* Initialize */
 	Dtw_Table table;
-	int i=0,ret,*outviterbi=NULL;
+	int i=0,ret,*outviterbi=NULL,index1,index2;
 	double *out=NULL,*z=NULL;
     ret=init_dtw(&table, dim, x, y, num_test, num_ref, path_type, norm_type);
 	if(1==ret)
@@ -1472,7 +1472,21 @@ int dtw(double *x, double *y, int num_test, int num_ref, int dim, int path_type,
 		outviterbi[2*i+1]=*(table.data[1].viterbi + i);
     }
 	*outviterbi_addr=outviterbi;
-
+/*	
+	index1=outviterbi[100*2+0];
+	index2=outviterbi[100*2+1];
+	fprintf(stderr,"\n%d %d\n",index1,index2);
+	for(i=0;i<dim;i++)
+	{
+		fprintf(stderr,"%lf ",x[index1*dim+i]);
+	}
+	fprintf(stderr,"\n");
+	for(i=0;i<dim;i++)
+	{
+		fprintf(stderr,"%lf ",out[100*dim*2+i]);
+	}
+	fprintf(stderr,"\n");
+*/
 	dtw_free(&table);
 	return 0;
 }
@@ -1497,13 +1511,4 @@ int dtw_result(double *out,int *viterbi_path,int out_addr,int outviterbi_addr,lo
 	free(ptr_viterbi);
 	return 0;
 }
-
-
-
-
-
-
-
-
-
 

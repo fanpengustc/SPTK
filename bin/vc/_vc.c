@@ -303,3 +303,121 @@ int vc(const GMM * gmm, const DELTAWINDOW * window, const size_t total_frame,
 
    return (0);
 }
+
+
+int vc_run(double *source,double *gmm_weight,double *gmm_mean,double *gmm_cov,double *gv_mean_in,double *gv_vari_in,int source_vlen,int target_vlen,int total_frame,int num_mix,int delta_order,int gv_flag,double FLOOR,double *target)
+{
+	char *coef =NULL;
+	int i,j,k,m,len_total,dw_num=1,win_max_width=0;
+	double floor=FLOOR;
+	double *gv_mean=NULL,*gv_vari=NULL;
+	Boolean full =TR;
+	GMM gmm;
+	DELTAWINDOW window;
+	
+	dw_num+=delta_order;
+	if(gv_flag!=0)
+	{
+		gv_mean=gv_mean_in;
+		gv_vari=gv_vari_in;
+	}
+	len_total=(source_vlen+target_vlen)*dw_num;
+
+	/* load GMM parameters */
+	alloc_GMM(&gmm, num_mix, len_total, full);
+	memcpy(gmm.weight, gmm_weight, num_mix*sizeof(*(gmm_weight)));
+	for (m = 0; m < num_mix; m++) {
+		memcpy(gmm.gauss[m].mean, gmm_mean + m * len_total, len_total*sizeof(*(gmm_mean)));
+		for (i = 0; i < len_total; i++) {
+			memcpy(gmm.gauss[m].cov[i],gmm_cov + m*len_total*len_total + i*len_total,len_total*sizeof(*(gmm.gauss[m].cov[i])));
+		}
+	}
+	prepareCovInv_GMM(&gmm);
+	prepareGconst_GMM(&gmm);
+
+	/* flooring for diagonal component of covariance */
+	if (floor != 0.0) {
+		for (i = 0; i < num_mix; i++) {
+			for (j = 0; j < (int) len_total; j++) {
+				gmm.gauss[i].cov[j][j] += floor;
+			}
+		}
+	}
+
+	/* set window parameters*/
+	window.win_size = dw_num;
+	window.win_l_width =
+	(int *) getmem(window.win_size, sizeof(*(window.win_l_width)));
+	window.win_r_width =
+	(int *) getmem(window.win_size, sizeof(*(window.win_r_width)));
+	window.win_coefficient =
+	(double **) getmem(window.win_size, sizeof(*(window.win_coefficient)));
+	window.win_l_width[0] = 0;
+	window.win_r_width[0] = 0;
+	window.win_coefficient[0] = dgetmem(1);
+	window.win_coefficient[0][0] = 1.0;
+	if(delta_order>0)
+	{
+		int a0, a1, a2, dw_leng;
+		for (i = 1; i < window.win_size; i++) {
+			dw_leng = 1;
+			window.win_l_width[i] = -dw_leng;
+			window.win_r_width[i] = dw_leng;
+			window.win_coefficient[i] = dgetmem(dw_leng * 2 + 1);
+			window.win_coefficient[i] += dw_leng;
+		}
+		for (a1 = 0, j = -dw_leng; j <= dw_leng; a1 += j * j, j++);
+		for (j = -dw_leng; j <= dw_leng; j++) {
+			window.win_coefficient[1][j] = (double) j / (double) a1;
+		}
+	
+		if (window.win_size > 2) {
+			dw_leng = 1;
+			for (a0 = a1 = a2 = 0, j = -dw_leng; j <= dw_leng;
+				a0++, a1 += j * j, a2 += j * j * j * j, j++);
+			for (j = -dw_leng; j <= dw_leng; j++) {
+				window.win_coefficient[2][j]
+				= 2 * ((double) (a0 * j * j - a1)) /
+				((double) (a2 * a0 - a1 * a1));
+			}
+		}
+	
+	}
+	win_max_width = window.win_r_width[0];       /* width of static window is 0 */
+	for (i = 1; i < window.win_size; i++) {
+		if (win_max_width < window.win_r_width[i]) {
+			win_max_width = window.win_r_width[i];
+		}
+		if (win_max_width < -window.win_l_width[i]) {
+			win_max_width = -window.win_l_width[i];
+		}
+	}
+	window.win_max_width = win_max_width;
+	
+	for (m = 0; m < gmm.nmix; m++) {
+		invert(gmm.gauss[m].cov, gmm.gauss[m].inv, source_vlen * window.win_size);
+		if (full) {
+			gmm.gauss[m].gconst =
+				cal_gconstf(gmm.gauss[m].cov, source_vlen * window.win_size);
+		} else {
+			gmm.gauss[m].gconst =
+				cal_gconst(gmm.gauss[m].var, source_vlen * window.win_size);
+		}
+	}
+
+	/* perform conversion */
+	vc(&gmm, &window, total_frame, source_vlen, target_vlen, gv_mean, gv_vari,source, target);
+
+	free_GMM(&gmm);
+	for (i = 0; i < window.win_size; i++) {
+		free(window.win_coefficient[i] + window.win_l_width[i]);
+	}
+	free(window.win_l_width);
+	free(window.win_r_width);
+
+}
+
+
+
+
+

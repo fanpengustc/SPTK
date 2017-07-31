@@ -532,3 +532,302 @@ int free_GMM(GMM * gmm)
 
    return (0);
 }
+
+
+int gmm_train(double *dat,int *dim_list,int L,int M,int T,int cov_dim,int S,int Imin,int Imax,double E,double V ,double W,double *out_weight,double *out_mean,double *out_cov)
+{
+	GMM gmm, tgmm;
+	double *pd,*cb,*icb,*logwgd,logb,*sum,*xi=NULL,*eta=NULL,
+		diff,ave_logp0=0.0,ave_logp1,change=1.0e10,tmp1,tmp2,mapt,test_sum;
+	int l,m,N,t,full=1,i,j,k,*tindex,*cntcb,offset_row=0,offset_col=0,row=0,col=0;
+	Boolean block_full=FA,block_corr=TR,multiple_dim=TR,full_cov=FA,init_success=0;
+	
+	logwgd = dgetmem(M);
+	sum = dgetmem(M);
+    
+	/* Initialization of GMM parameters */
+	alloc_GMM(&gmm, M, L, full);
+	alloc_GMM(&tgmm, M, L, full);
+	/* for VQ */
+	N = 1;
+	while (N < M)
+		N *= 2;
+	cb = dgetmem(N * L);
+	icb = dgetmem(L);
+	tindex = (int *) getmem(T, sizeof(int));
+	cntcb = (int *) getmem(M, sizeof(int));
+
+
+	fprintf(stderr, "T = %d  L = %d  M = %d\n", T, L, M);
+	fprintf(stderr, "gmm_train:\n    start LBG\n");
+	/* LBG */
+	fprintf(stderr, "    start LBG vaverage()\n");
+	vaverage(dat, L, T, icb);
+	fprintf(stderr, "    start LBG lbg()\n");
+	lbg(dat, L, T, icb, 1, cb, N, 1000, 1, S, 1, 0.0001, 0.0001);
+
+	for (t = 0, pd = dat; t < T; t++, pd += L) {
+		tindex[t] = vq(pd, cb, L, M);
+		cntcb[tindex[t]]++;
+	}
+
+	for (m = 0; m < M; m++)
+	{
+		if (cntcb[m] == 0) {
+			fprintf(stderr, "    Error: No data for mixture No.%d\n", m,i);
+			free_GMM(&gmm);
+			free_GMM(&tgmm);
+			free(logwgd);
+			free(sum);
+			free(cb);
+			free(icb);
+			free(tindex);
+			free(cntcb);
+			return 1;
+		}
+	}
+
+
+
+	/* weights */
+	for (m = 0; m < M; m++) {
+		gmm.weight[m] = (double) cntcb[m] / (double) T;
+	}
+	floorWeight_GMM(&gmm, W);
+
+	/* mean */
+	for (m = 0, pd = cb; m < M; m++, pd += L) {
+		movem(pd, gmm.gauss[m].mean, sizeof(double), L);
+	}
+
+	/* variance */
+	if (full != TR) {
+		for (t = 0, pd = dat; t < T; t++, pd += L)
+			for (l = 0; l < L; l++) {
+				diff = gmm.gauss[tindex[t]].mean[l] - pd[l];
+				gmm.gauss[tindex[t]].var[l] += diff * diff;
+			}
+
+		for (m = 0; m < M; m++) {
+			for (l = 0; l < L; l++) {
+				gmm.gauss[m].var[l] /= (double) cntcb[m];
+			}
+		}
+	}
+	/* full covariance */
+	else {
+		for (t = 0, pd = dat; t < T; t++, pd += L) {
+			for (l = 0; l < L; l++) {
+				for (i = 0; i <= l; i++) {
+					diff =
+						(gmm.gauss[tindex[t]].mean[l] -
+						 pd[l]) * (gmm.gauss[tindex[t]].mean[i] - pd[i]);
+					gmm.gauss[tindex[t]].cov[l][i] += diff;
+				}
+			}
+		}
+
+		for (m = 0; m < M; m++)
+			for (l = 0; l < L; l++)
+				for (i = 0; i <= l; i++) {
+					gmm.gauss[m].cov[l][i] /= (double) cntcb[m];
+				}
+
+		/* masking */
+		if (multiple_dim == TR) {
+			maskCov_GMM(&gmm, dim_list, cov_dim, block_full, block_corr);
+		}
+	}
+	floorVar_GMM(&gmm, V);
+
+	/* end of initialization */
+
+	fprintf(stderr, "    start EM:\n");
+	/* EM training of GMM parameters */
+	for (i = 0; (i <= Imax) && ((i <= Imin) || (fabs(change) > E)); i++) {
+		fillz_GMM(&tgmm);
+		fillz(sum, sizeof(double), M);
+
+		if (full != TR) {
+			for (m = 0; m < M; m++)
+				gmm.gauss[m].gconst = cal_gconst(gmm.gauss[m].var, L);
+		} else {
+			for (m = 0; m < M; m++) {
+				gmm.gauss[m].gconst = cal_gconstf(gmm.gauss[m].cov, L);
+				if (gmm.gauss[m].gconst == LZERO) {
+					fprintf(stderr, "    ERROR : Can't caluculate covdet\n");
+					free_GMM(&gmm);
+					free_GMM(&tgmm);
+					free(logwgd);
+					free(sum);
+					free(cb);
+					free(icb);
+					free(tindex);
+					free(cntcb);
+					return 2;
+				}
+			}
+		}
+		if (full == TR) {
+			prepareCovInv_GMM(&gmm);
+		}
+
+		for (t = 0, ave_logp1 = 0.0, pd = dat; t < T; t++, pd += L) {
+			for (m = 0, logb = LZERO; m < M; m++) {
+				logwgd[m] = log_wgd(&gmm, m, 0, L, pd);
+				logb = log_add(logb, logwgd[m]);
+			}
+			ave_logp1 += logb;
+
+			for (m = 0; m < M; m++) {
+				tmp1 = exp(logwgd[m] - logb);
+				sum[m] += tmp1;
+
+				for (l = 0; l < L; l++) {
+					tmp2 = tmp1 * pd[l];
+					tgmm.gauss[m].mean[l] += tmp2;
+					if (full != TR)
+						tgmm.gauss[m].var[l] += tmp2 * pd[l];
+					else {
+						for (j = 0; j <= l; j++) {
+							tgmm.gauss[m].cov[l][j] +=
+								tmp1 * (pd[l] - gmm.gauss[m].mean[l]) * (pd[j] -
+										gmm.
+										gauss[m].mean
+										[j]);
+						}
+					}
+				}
+			}
+		}
+
+		/* Output average log likelihood at each iteration */
+		ave_logp1 /= (double) T;
+		if (i == 1 && M == 1)
+			ave_logp0 = ave_logp1;
+
+		fprintf(stderr, "    iter %3d : ", i);
+		fprintf(stderr, "ave_logprob = %g", ave_logp1);
+		if (i) {
+			change = ave_logp1 - ave_logp0;
+			fprintf(stderr, "  change = %g", change);
+		}
+		fprintf(stderr, "\n");
+		ave_logp0 = ave_logp1;
+
+		/* Update perameters */
+		/* weights */
+		for (m = 0; m < M; m++) {
+			gmm.weight[m] = sum[m] / (double) T;
+		}
+
+		floorWeight_GMM(&gmm, W);
+
+		/* mean, variance */
+		for (m = 0; m < M; m++) {
+			for (l = 0; l < L; l++) {
+				gmm.gauss[m].mean[l] = tgmm.gauss[m].mean[l] / sum[m];
+			}
+
+			if (multiple_dim == TR) {
+				if (block_full == FA && block_corr == FA) {
+					if (full_cov != TR) {    /* -f is not specified */
+						for (l = 0; l < L; l++) {
+							gmm.gauss[m].cov[l][l] = tgmm.gauss[m].cov[l][l] / sum[m];
+						}
+					} else {
+						for (l = 0; l < L; l++) {
+							for (j = 0; j <= l; j++) {
+								gmm.gauss[m].cov[l][j] =
+									tgmm.gauss[m].cov[l][j] / sum[m];
+							}
+						}
+					}
+				} else {
+					/* for each block (lower triangle) */
+					offset_row = 0;
+					for (row = 0; row < cov_dim; row++) {    /* row block number */
+						offset_col = 0;
+						for (col = 0; col <= row; col++) {    /* column block number */
+							if (dim_list[row] == dim_list[col]) {      /* block is square */
+								if (block_full == FA && block_corr == TR) {
+									/* blockwise diagonal */
+									for (k = offset_row, l = offset_col;
+											k < offset_row + dim_list[row]; k++, l++) {
+										gmm.gauss[m].cov[k][l] =
+											tgmm.gauss[m].cov[k][l] / sum[m];
+									}
+								} else {        /* block_full is TR */
+									for (k = offset_row; k < offset_row + dim_list[row];
+											k++) {
+										for (l = offset_col;
+												l < offset_col + dim_list[col]; l++) {
+											if (row == col) {
+												if (l <= k) {
+													gmm.gauss[m].cov[k][l] =
+														tgmm.gauss[m].cov[k][l] / sum[m];
+												}
+											} else {
+												if (block_corr == TR) {
+													gmm.gauss[m].cov[k][l] =
+														tgmm.gauss[m].cov[k][l] / sum[m];
+												}
+											}
+										}
+									}
+								}
+							}
+							offset_col += dim_list[col];
+						}
+						offset_row += dim_list[row];
+					}
+				}
+			} else {
+				if (full != TR) {
+					for (l = 0; l < L; l++) {
+						gmm.gauss[m].var[l] = tgmm.gauss[m].var[l] / sum[m]
+							- gmm.gauss[m].mean[l] * gmm.gauss[m].mean[l];
+					}
+				} else {
+					for (l = 0; l < L; l++) {
+						for (j = 0; j <= l; j++) {
+							gmm.gauss[m].cov[l][j] = tgmm.gauss[m].cov[l][j] / sum[m];
+						}
+					}
+				}
+			}
+		}
+		floorVar_GMM(&gmm, V);
+	}
+	/*
+	test_sum=0;
+	for (m=0;m<M;m++)
+	{
+		test_sum+=gmm.weight[m];
+		fprintf(stderr,"the %dth weight is %lf\n",m,gmm.weight[m]);
+
+	}
+	fprintf(stderr,"the sum of weight is %lf\n",test_sum);
+	*/
+	memcpy(out_weight, gmm.weight, M*sizeof(*(gmm.weight)));
+	for (m = 0; m < M; m++) {
+			memcpy(out_mean + m * L, gmm.gauss[m].mean, L*sizeof(*(gmm.gauss[m].mean)));
+			for (i = 0; i < L; i++) {
+				for (j = 0; j < i; j++) {
+					gmm.gauss[m].cov[j][i] = gmm.gauss[m].cov[i][j];
+				}
+			}
+			for (i = 0; i < L; i++) {
+				memcpy(out_cov + m*L*L + i*L,gmm.gauss[m].cov[i],L*sizeof(*(gmm.gauss[m].cov[i])));
+			}
+	}
+	free_GMM(&gmm);
+	free_GMM(&tgmm);
+	free(logwgd);
+	free(sum);
+	free(cb);
+	free(icb);
+	free(tindex);
+	free(cntcb);
+	return 0;
+}
